@@ -78,5 +78,10 @@ resources:
             value: databricks-bge-large-en
           - name: CHAT_ENDPOINT
             value: databricks-meta-llama-3-3-70b-instruct
-        # The app does not need the TMDB key (it only reads from Unity Catalog), so the secret is
-        # NOT mounted here — only the ingest notebook reads it, via dbutils.secrets.get.
+          # TMDB key, mounted from the secret scope. The serverless job compute is network-isolated
+          # (no outbound internet), so the ingest notebook can't reach api.themoviedb.org; instead the
+          # app fetches TMDB from app compute (which has egress) on the Admin page and loads bronze via
+          # the SQL warehouse. Secret refs in app env use {{secrets/<scope>/<key>}}.
+          - name: TMDB_API_KEY
+            value: "{{secrets/movie_night_planner/tmdb_api_key}}"
+        # The app also backfills bronze from TMDB (see tmdb_fetch.py + the Admin page).
