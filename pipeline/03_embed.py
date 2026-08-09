@@ -84,7 +84,7 @@ review_agg = (
     .filter(F.col("content").isNotNull() & (F.length("content") > 0))
     .withColumn("snippet", F.substring("content", 1, REVIEW_CHARS))
     .groupBy("movie_id")
-    .agg(F.collect_list("snippet").alias("review_list))
+    .agg(F.collect_list("snippet").alias("review_list"))
 )
 
 base = (
