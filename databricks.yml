@@ -53,8 +53,12 @@ resources:
   apps:
     anime-night-planner:
       name: anime-night-planner
+      source_code_path: ./app
       config:
-        command: streamlit run app.py
+        command:
+          - streamlit
+          - run
+          - app.py
         env:
           - name: CATALOG
             value: anime_night_planner
@@ -69,10 +73,3 @@ resources:
             value: databricks-bge-large-en
           - name: CHAT_ENDPOINT
             value: databricks-meta-llama-3-3-70b-instruct
-        resources:
-          requests:
-            memory: 2Gi
-            cpu: "1.0"
-          limits:
-            memory: 4Gi
-            cpu: "2.0"
