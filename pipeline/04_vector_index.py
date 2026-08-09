@@ -39,35 +39,36 @@ print(f"Index: {INDEX_NAME}  (source: {SOURCE_TABLE})")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 1. Ensure a serverless Vector Search endpoint exists
+# MAGIC
+# MAGIC databricks-sdk 0.125 exposes `vector_search_endpoints.list_endpoints()` (not `.list()`)
+# MAGIC and `create_endpoint_and_wait()` for blocking until the endpoint is ready.
 # COMMAND ----------
 # MAGIC %python
-existing_endpoints = {e.name for e in w.vector_search_endpoints.list()}
+import time
+
+existing_endpoints = {e.name for e in w.vector_search_endpoints.list_endpoints()}
 if ENDPOINT_NAME in existing_endpoints:
     print(f"Endpoint '{ENDPOINT_NAME}' already exists.")
 else:
-    try:
-        w.vector_search_endpoints.create_endpoint_and_wait(
-            name=ENDPOINT_NAME,
-            endpoint_type=EndpointType.STANDARD,  # "STANDARD" is the serverless-backed endpoint type
-        )
-        print(f"Created Vector Search endpoint '{ENDPOINT_NAME}'.")
-    except TypeError:
-        # Older SDK: create then poll readiness separately.
-        w.vector_search_endpoints.create_endpoint(
-            name=ENDPOINT_NAME,
-            endpoint_type=EndpointType.STANDARD,
-        )
-        w.vector_search_endpoints.wait_get_index_ready(ENDPOINT_NAME, timeout=900)
-        print(f"Created Vector Search endpoint '{ENDPOINT_NAME}' (fallback path).")
+    w.vector_search_endpoints.create_endpoint_and_wait(
+        name=ENDPOINT_NAME,
+        endpoint_type=EndpointType.STANDARD,  # "STANDARD" is the serverless-backed endpoint type
+    )
+    print(f"Created Vector Search endpoint '{ENDPOINT_NAME}'.")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 2. Create the Delta-sync vector index
 # MAGIC
 # MAGIC Self-managed embeddings: `movie_embeddings.embedding_vector` already holds the 1024-dim
 # MAGIC vector (computed in step 03). The index syncs the precomputed vector column
-# MAGIC (`embedding_vector_columns`), not a text source column.
+# MAGIC (`embedding_vector_columns`), not a text source column. A CONTINUOUS pipeline keeps the
+# MAGIC index up to date as movie_embeddings changes.
 # COMMAND ----------
 # MAGIC %python
+# Idempotency: trying create_index on an existing index throws "already exists", which
+# we treat as success. (We don't gate on list_indexes — the returned `MiniVectorIndex.name`
+# shape is unreliable across SDK versions, and a false "exists" would make us skip create
+# then block 15 min on get_index for an index that isn't there.)
 try:
     w.vector_search_indexes.create_index(
         name=INDEX_NAME,
@@ -81,11 +82,34 @@ try:
         ),
     )
     print("Index create request sent.")
-except Exception as exc:  # noqa: BLE001 - likely already exists
-    print(f"create_index returned: {exc!r}")
+except Exception as exc:  # noqa: BLE001 - already exists / race -> fine
+    msg = str(exc).lower()
+    if "already" in msg or "exists" in msg:
+        print(f"Index '{INDEX_NAME}' already exists.")
+    else:
+        print(f"create_index returned: {exc!r}")
 
-w.vector_search_indexes.wait_get_index_ready(INDEX_NAME, timeout=900)
-print("Index is READY.")
+# Poll readiness by reading get_index().status.ready (databricks-sdk 0.125 has no
+# wait_get_index_ready helper). Vector Search provisioning can take several minutes.
+print("Waiting for index to become ready (up to ~15 min)…")
+ready = False
+for attempt in range(90):  # 90 * 10s = 15 min
+    try:
+        idx = w.vector_search_indexes.get_index(index_name=INDEX_NAME)
+        st = idx.status
+        ready = bool(getattr(st, "ready", False))
+        indexed = getattr(st, "indexed_row_count", None)
+        msg = getattr(st, "message", "")
+        print(f"  [{attempt * 10:>4}s] ready={ready} indexed_rows={indexed} msg={msg!r}")
+        if ready:
+            break
+    except Exception as exc:  # noqa: BLE001 - index object may not be fetchable immediately after create
+        print(f"  [{attempt * 10:>4}s] get_index not available yet: {exc!r}")
+    time.sleep(10)
+
+if not ready:
+    raise RuntimeError(f"Vector index '{INDEX_NAME}' did not become ready within 15 min.")
+print(f"Index '{INDEX_NAME}' is READY.")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 3. Sanity query (proves end-to-end retrieval)
