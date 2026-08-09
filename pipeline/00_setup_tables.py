@@ -1,10 +1,13 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 00 — Catalog, Schema, Tables & Demo Seed
+# MAGIC # 00 — Catalog, Schema, Tables & Demo Seed (Movie Night Planner)
 # MAGIC
 # MAGIC Creates the Unity Catalog schema plus every bronze / silver / app-state table used by the
-# MAGIC Anime Night Planner. Idempotent — safe to run repeatedly. Also seeds a demo group so the
+# MAGIC Movie Night Planner. Idempotent — safe to run repeatedly. Also seeds a demo group so the
 # MAGIC app has data to render before the pipeline is ever run.
+# MAGIC
+# MAGIC Domain source: TMDB (The Movie Database) API. Data provided by TMDB — free for
+# MAGIC non-commercial educational use with attribution.
 # MAGIC
 # MAGIC **Note:** `groups` is a reserved word in Spark SQL, so that table is always backtick-quoted.
 # COMMAND ----------
@@ -13,7 +16,7 @@
 # COMMAND ----------
 # MAGIC %python
 # Attempt a dedicated catalog first; fall back to `main` if the account denies catalog creation.
-CATALOG = "anime_night_planner"
+CATALOG = "movie_night_planner"
 SCHEMA = "default"
 FALLBACK_CATALOG = "main"
 
@@ -39,53 +42,111 @@ catalog, schema = ensure_catalog_schema()
 # MAGIC ## 2. DDL — all tables
 # COMMAND ----------
 # MAGIC %python
-# Bronze tables keep the raw Jikan JSON payloads verbatim for lineage.
+# Bronze tables keep the raw TMDB JSON payloads verbatim for lineage.
 DDL = {
-    "raw_anime": """
-        CREATE TABLE IF NOT EXISTS raw_anime (
-            id          BIGINT,
-            source_url  STRING,
-            fetched_at  TIMESTAMP,
-            payload     STRING
+    "raw_movies": """
+        CREATE TABLE IF NOT EXISTS raw_movies (
+            tmdb_id      BIGINT,
+            source_url   STRING,
+            fetched_at   TIMESTAMP,
+            payload      STRING
         ) USING DELTA
     """,
-    "raw_characters": """
-        CREATE TABLE IF NOT EXISTS raw_characters (
-            id          BIGINT,
-            anime_id    BIGINT,
-            source_url  STRING,
-            fetched_at  TIMESTAMP,
-            payload     STRING
+    "raw_credits": """
+        CREATE TABLE IF NOT EXISTS raw_credits (
+            tmdb_id      BIGINT,
+            source_url   STRING,
+            fetched_at   TIMESTAMP,
+            payload      STRING
+        ) USING DELTA
+    """,
+    "raw_keywords": """
+        CREATE TABLE IF NOT EXISTS raw_keywords (
+            tmdb_id      BIGINT,
+            source_url   STRING,
+            fetched_at   TIMESTAMP,
+            payload      STRING
         ) USING DELTA
     """,
     "raw_reviews": """
         CREATE TABLE IF NOT EXISTS raw_reviews (
-            id          BIGINT,
-            anime_id    BIGINT,
-            source_url  STRING,
-            fetched_at  TIMESTAMP,
-            payload     STRING
+            tmdb_id      BIGINT,
+            review_id    STRING,
+            source_url   STRING,
+            fetched_at   TIMESTAMP,
+            payload      STRING
+        ) USING DELTA
+    """,
+    "raw_providers": """
+        CREATE TABLE IF NOT EXISTS raw_providers (
+            tmdb_id      BIGINT,
+            source_url   STRING,
+            fetched_at   TIMESTAMP,
+            payload      STRING
+        ) USING DELTA
+    """,
+    "raw_genres": """
+        CREATE TABLE IF NOT EXISTS raw_genres (
+            genre_id     INT,
+            source_url   STRING,
+            fetched_at   TIMESTAMP,
+            payload      STRING
         ) USING DELTA
     """,
     # Silver — the RAG + dashboard corpus.
-    "anime": """
-        CREATE TABLE IF NOT EXISTS anime (
-            anime_id        BIGINT,
+    "movies": """
+        CREATE TABLE IF NOT EXISTS movies (
+            movie_id        BIGINT,
             title           STRING,
-            title_english   STRING,
-            synopsis        STRING,
-            type            STRING,
-            episodes        INT,
-            score           DOUBLE,
-            scored_by       BIGINT,
+            original_title  STRING,
+            overview        STRING,
+            tagline         STRING,
+            runtime         INT,
+            vote_average    DOUBLE,
+            vote_count      BIGINT,
+            release_date    DATE,
             year            INT,
-            season          STRING,
-            source          STRING,
-            rating          STRING,
-            status          STRING,
+            poster_path     STRING,
+            backdrop_path   STRING,
             genres          ARRAY<STRING>,
-            embedding_vector ARRAY<FLOAT>,
+            language        STRING,
+            status          STRING,
             updated_at      TIMESTAMP
+        ) USING DELTA
+    """,
+    "cast": """
+        CREATE TABLE IF NOT EXISTS cast (
+            person_id    BIGINT,
+            movie_id     BIGINT,
+            name         STRING,
+            character    STRING,
+            credit_order INT
+        ) USING DELTA
+    """,
+    "keywords": """
+        CREATE TABLE IF NOT EXISTS keywords (
+            movie_id     BIGINT,
+            keyword_id   BIGINT,
+            keyword      STRING
+        ) USING DELTA
+    """,
+    "reviews": """
+        CREATE TABLE IF NOT EXISTS reviews (
+            review_id    STRING,
+            movie_id     BIGINT,
+            author       STRING,
+            rating       DOUBLE,
+            content      STRING,
+            created_at    STRING,
+            url          STRING
+        ) USING DELTA
+    """,
+    "providers": """
+        CREATE TABLE IF NOT EXISTS providers (
+            movie_id      BIGINT,
+            country       STRING,
+            provider_name STRING,
+            provider_type STRING
         ) USING DELTA
     """,
     "genres": """
@@ -94,39 +155,23 @@ DDL = {
             name        STRING
         ) USING DELTA
     """,
-    "anime_genres": """
-        CREATE TABLE IF NOT EXISTS anime_genres (
-            anime_id    BIGINT,
-            genre_id    INT
-        ) USING DELTA
-    """,
-    "characters": """
-        CREATE TABLE IF NOT EXISTS characters (
-            character_id    BIGINT,
-            anime_id        BIGINT,
-            name            STRING,
-            role            STRING,
-            favorites       BIGINT,
-            about           STRING,
-            embedding_vector ARRAY<FLOAT>
-        ) USING DELTA
-    """,
-    "reviews": """
-        CREATE TABLE IF NOT EXISTS reviews (
-            review_id       BIGINT,
-            anime_id        BIGINT,
-            author          STRING,
-            score           DOUBLE,
-            review          STRING,
-            embedding_vector ARRAY<FLOAT>
+    # Embeddings — self-managed vectors, source table for the Vector Search index.
+    "movie_embeddings": """
+        CREATE TABLE IF NOT EXISTS movie_embeddings (
+            movie_id          BIGINT,
+            title             STRING,
+            overview          STRING,
+            embedding_vector  ARRAY<FLOAT>,
+            embedding_model   STRING,
+            embedded_at       TIMESTAMP
         ) USING DELTA
     """,
     # App-state — written by the agent via the SQL warehouse.
     "users": """
         CREATE TABLE IF NOT EXISTS users (
-            user_id     INT,
-            name        STRING,
-            preferences ARRAY<STRING>
+            user_id      INT,
+            name         STRING,
+            preferences  ARRAY<STRING>
         ) USING DELTA
     """,
     "`groups`": """
@@ -145,8 +190,10 @@ DDL = {
     """,
     "ratings": """
         CREATE TABLE IF NOT EXISTS ratings (
+            rating_id   BIGINT,
             group_id    INT,
-            anime_id    BIGINT,
+            movie_id    BIGINT,
+            user_id     INT,
             score       INT,
             comment     STRING,
             rated_at    TIMESTAMP
@@ -154,11 +201,22 @@ DDL = {
     """,
     "watchlist_items": """
         CREATE TABLE IF NOT EXISTS watchlist_items (
+            item_id     BIGINT,
             group_id    INT,
-            anime_id    BIGINT,
+            movie_id    BIGINT,
             status      STRING,
             added_by    INT,
             added_at    TIMESTAMP
+        ) USING DELTA
+    """,
+    "recommendations": """
+        CREATE TABLE IF NOT EXISTS recommendations (
+            rec_id        BIGINT,
+            group_id     INT,
+            movie_id     BIGINT,
+            reason       STRING,
+            recommended_by STRING,
+            recommended_at TIMESTAMP
         ) USING DELTA
     """,
     # Lineage / run metadata.
@@ -177,10 +235,10 @@ for name, stmt in DDL.items():
     spark.sql(stmt)
     print(f"OK  {name}")
 
-# Enable Change Data Feed on the `anime` table (required by the Delta-sync Vector Search index).
+# Enable Change Data Feed on movie_embeddings (the Vector Search Delta-sync source table).
 # Idempotent: ALTER is safe even if the property is already set.
-spark.sql(f"ALTER TABLE `{catalog}`.`{schema}`.anime SET TBLPROPERTIES ('delta.enableChangeDataFeed' = true)")
-print("OK  anime (delta.enableChangeDataFeed = true)")
+spark.sql(f"ALTER TABLE `{catalog}`.`{schema}`.movie_embeddings SET TBLPROPERTIES ('delta.enableChangeDataFeed' = true)")
+print("OK  movie_embeddings (delta.enableChangeDataFeed = true)")
 
 print("\nTables in current schema:")
 for row in spark.sql("SHOW TABLES").collect():
@@ -189,9 +247,9 @@ for row in spark.sql("SHOW TABLES").collect():
 # MAGIC %md
 # MAGIC ## 3. Demo seed (idempotent)
 # MAGIC
-# MAGIC Seeds one group with three members and a small watchlist referencing well-known MAL ids
-# MAGIC (Cowboy Bebop=1, FMA:Brotherhood=5114, Attack on Titan=16498, One Piece=21). These titles
-# MAGIC appear in the top-anime ingest, so joins resolve once the pipeline runs.
+# MAGIC Seeds one group with three members and a small watchlist referencing well-known TMDB
+# MAGIC movie ids ( Shawshank=278, Godfather=238, Dark Knight=155, Pulp Fiction=680),
+# MAGIC which appear in the popular-movie ingest, so joins resolve once the pipeline runs.
 # COMMAND ----------
 # MAGIC %python
 def table_nonempty(name):
@@ -205,9 +263,9 @@ def table_nonempty(name):
 if not table_nonempty("users"):
     spark.sql("""
         INSERT INTO users (user_id, name, preferences) VALUES
-            (1, 'Alice', array('romance', 'sci-fi')),
-            (2, 'Bob',   array('action', 'comedy')),
-            (3, 'Carol', array('slice of life', 'drama'))
+            (1, 'Alice', array('sci-fi', 'comedy')),
+            (2, 'Bob',   array('action', 'thriller')),
+            (3, 'Carol', array('drama', 'romance'))
     """)
     print("Seeded users.")
 
@@ -229,11 +287,11 @@ if not table_nonempty("group_members"):
 
 if not table_nonempty("watchlist_items"):
     spark.sql("""
-        INSERT INTO watchlist_items (group_id, anime_id, status, added_by, added_at) VALUES
-            (1, 1,     'watched', 1, current_timestamp()),
-            (1, 5114,  'watched', 1, current_timestamp()),
-            (1, 16498, 'watched', 2, current_timestamp()),
-            (1, 21,    'queued',  3, current_timestamp())
+        INSERT INTO watchlist_items (item_id, group_id, movie_id, status, added_by, added_at) VALUES
+            (1, 1, 278,  'watched', 1, current_timestamp()),
+            (2, 1, 238,  'watched', 1, current_timestamp()),
+            (3, 1, 155,  'watched', 2, current_timestamp()),
+            (4, 1, 680,  'queued',  3, current_timestamp())
     """)
     print("Seeded watchlist_items.")
 
