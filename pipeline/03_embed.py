@@ -39,21 +39,24 @@ REVIEW_CHARS = 600
 
 
 def embed_texts(texts):
-    """Embed a list of strings, returning one 1024-dim vector list per input (batched)."""
+    """Embed a list of strings, returning one 1024-dim vector list per input (batched).
+
+    Uses `serving_endpoints.query(name=..., input=batch)` (databricks-sdk >= 0.125).
+    The foundation embeddings endpoint returns a `QueryEndpointResponse` whose `.data`
+    is a list of `EmbeddingsV1ResponseEmbeddingElement` in input order, each with an
+    `.embedding` (list[float]). We preserve input order, matching embeddings to texts.
+    """
     if not texts:
         return []
     vectors = []
     for i in range(0, len(texts), BATCH):
         batch = [t[:MAX_CHARS] for t in texts[i:i + BATCH]]
-        resp = w.serving_endpoints.invoke(
-            endpoint_name=EMBED_ENDPOINT,
-            inputs={"input": batch},
-        )
+        resp = w.serving_endpoints.query(name=EMBED_ENDPOINT, input=batch)
         data = getattr(resp, "data", None)
         if not data:
             raise RuntimeError(f"No embedding data returned for batch {i // BATCH}")
-        ordered = sorted(data, key=lambda d: d.get("embedding_index", 0))
-        vectors.extend(d["embedding"] for d in ordered)
+        # elements are returned in input order; extract the .embedding vector from each
+        vectors.extend(list(el.embedding) for el in data)
     return vectors
 
 

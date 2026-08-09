@@ -35,11 +35,13 @@ class VectorStore:
         return self._ws
 
     def embed(self, text):
-        resp = self._workspace().serving_endpoints.invoke(
-            endpoint_name=self.embed_endpoint,
-            inputs={"input": text[:5000]},
+        # serving_endpoints.query returns a QueryEndpointResponse whose .data is a list of
+        # EmbeddingsV1ResponseEmbeddingElement (input order), each with an .embedding list.
+        resp = self._workspace().serving_endpoints.query(
+            name=self.embed_endpoint,
+            input=[text[:5000]],
         )
-        return resp.data[0]["embedding"]
+        return list(resp.data[0].embedding)
 
     def search(self, query_text, columns=None, num_results=10):
         """Return a list of dicts: {'movie_id': ..., <columns...>, '_similarity': <distance>}.

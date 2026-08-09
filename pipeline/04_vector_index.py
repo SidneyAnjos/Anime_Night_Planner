@@ -92,11 +92,13 @@ print("Index is READY.")
 # COMMAND ----------
 # MAGIC %python
 # Embed a real query with the same model used at index time.
-resp = w.serving_endpoints.invoke(
-    endpoint_name="databricks-bge-large-en",
-    inputs={"input": "a heist thriller with a twist ending"},
+# (serving_endpoints.query returns a QueryEndpointResponse whose .data is a list of
+# EmbeddingsV1ResponseEmbeddingElement in input order, each with an .embedding list.)
+resp = w.serving_endpoints.query(
+    name="databricks-bge-large-en",
+    input=["a heist thriller with a twist ending"],
 )
-query_vector = resp.data[0]["embedding"]
+query_vector = list(resp.data[0].embedding)
 
 result = w.vector_search_indexes.query_index(
     index_name=INDEX_NAME,
