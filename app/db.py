@@ -11,6 +11,7 @@ deployed Databricks App:
    extension, or a PAT). Use `access_token=` directly.
 
 All statements are parameterized with `?` placeholders to keep LLM-sourced writes safe.
+Domain: Movie Night Planner (TMDB-sourced silver tables).
 """
 import os
 
@@ -48,7 +49,7 @@ class Database:
         self.host = (host or _env("DATABRICKS_HOST", "")).replace("https://", "").rstrip("/")
         self.http_path = http_path or _env("SQL_WAREHOUSE_PATH")
         self.token = token or _env("DATABRICKS_TOKEN")
-        self.catalog = catalog or _env("CATALOG", "anime_night_planner")
+        self.catalog = catalog or _env("CATALOG", "movie_night_planner")
         self.schema = schema or _env("SCHEMA", "default")
 
     def table(self, name):
@@ -97,10 +98,10 @@ class Database:
     def watchlist(self, group_id):
         return self.query(
             f"""
-            SELECT w.anime_id, a.title, w.status, w.added_at,
-                   a.score AS mal_score, a.episodes, a.genres
+            SELECT w.movie_id, m.title, w.status, w.added_at,
+                   m.vote_average AS tmdb_score, m.runtime, m.genres
             FROM {self.table('watchlist_items')} w
-            LEFT JOIN {self.table('anime')} a ON w.anime_id = a.anime_id
+            LEFT JOIN {self.table('movies')} m ON w.movie_id = m.movie_id
             WHERE w.group_id = ?
             ORDER BY w.added_at DESC
             """,
@@ -110,9 +111,9 @@ class Database:
     def ratings(self, group_id):
         return self.query(
             f"""
-            SELECT r.anime_id, a.title, r.score, r.comment, r.rated_at
+            SELECT r.movie_id, m.title, r.score, r.comment, r.rated_at
             FROM {self.table('ratings')} r
-            LEFT JOIN {self.table('anime')} a ON r.anime_id = a.anime_id
+            LEFT JOIN {self.table('movies')} m ON r.movie_id = m.movie_id
             WHERE r.group_id = ?
             ORDER BY r.rated_at DESC
             """,

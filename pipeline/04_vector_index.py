@@ -1,13 +1,17 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 04 — Vector Search Endpoint + Index
+# MAGIC # 04 — Vector Search Endpoint + Index (Movie Night Planner)
 # MAGIC
 # MAGIC Creates a **serverless Vector Search endpoint** and a **Delta-sync vector index**
-# MAGIC (`anime_synopsis_index`) over the precomputed `anime.embedding_vector` column, then runs a
-# MAGIC live sanity query to prove end-to-end retrieval works.
+# MAGIC (`movie_embeddings_index`) over the precomputed `movie_embeddings.embedding_vector` column
+# MAGIC (self-managed embeddings from step 03), then runs a live sanity query to prove end-to-end
+# MAGIC retrieval works.
+# MAGIC
+# MAGIC The app's `VectorStore` queries this same index and uses the same embedding endpoint, so
+# MAGIC index-time and query-time vectors live in the same vector space.
 # MAGIC
 # MAGIC **Prerequisites:** Vector Search enabled in the workspace region + permission to create
-# MAGIC serverless endpoints/indexes.
+# MAGIC serverless endpoints / indexes.
 # COMMAND ----------
 # MAGIC %python
 from databricks.sdk import WorkspaceClient
@@ -23,9 +27,9 @@ w = WorkspaceClient()
 
 catalog = spark.catalog.currentCatalog()
 schema = spark.catalog.currentDatabase()
-ENDPOINT_NAME = "anime_vector_search_endpoint"
-INDEX_NAME = f"{catalog}.{schema}.anime_synopsis_index"
-SOURCE_TABLE = f"{catalog}.{schema}.anime"
+ENDPOINT_NAME = "movie_vector_search_endpoint"
+INDEX_NAME = f"{catalog}.{schema}.movie_embeddings_index"
+SOURCE_TABLE = f"{catalog}.{schema}.movie_embeddings"
 print(f"Using catalog='{catalog}', schema='{schema}'")
 print(f"Index: {INDEX_NAME}  (source: {SOURCE_TABLE})")
 # COMMAND ----------
@@ -49,14 +53,14 @@ else:
             name=ENDPOINT_NAME,
             endpoint_type=EndpointType.STANDARD,
         )
-        w.vector_search_endpoints.wait_get_endpoint_ready(ENDPOINT_NAME, timeout=900)
+        w.vector_search_endpoints.wait_get_index_ready(ENDPOINT_NAME, timeout=900)
         print(f"Created Vector Search endpoint '{ENDPOINT_NAME}' (fallback path).")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 2. Create the Delta-sync vector index
 # MAGIC
-# MAGIC We use **self-managed embeddings**: the `anime.embedding_vector` column already holds the
-# MAGIC 1024-dim vector (computed in step 03). So the index syncs the precomputed vector column
+# MAGIC Self-managed embeddings: `movie_embeddings.embedding_vector` already holds the 1024-dim
+# MAGIC vector (computed in step 03). The index syncs the precomputed vector column
 # MAGIC (`embedding_vector_columns`), not a text source column.
 # COMMAND ----------
 # MAGIC %python
@@ -64,7 +68,7 @@ try:
     w.vector_search_indexes.create_index(
         name=INDEX_NAME,
         endpoint_name=ENDPOINT_NAME,
-        primary_key="anime_id",
+        primary_key="movie_id",
         index_type=VectorIndexType.DELTA_SYNC,
         delta_sync_index_spec=DeltaSyncVectorIndexSpecRequest(
             source_table=SOURCE_TABLE,
@@ -86,18 +90,18 @@ print("Index is READY.")
 # Embed a real query with the same model used at index time.
 resp = w.serving_endpoints.invoke(
     endpoint_name="databricks-bge-large-en",
-    inputs={"input": "an emotional romance with a sci-fi twist"},
+    inputs={"input": "a heist thriller with a twist ending"},
 )
 query_vector = resp.data[0]["embedding"]
 
 result = w.vector_search_indexes.query_index(
     index_name=INDEX_NAME,
-    columns=["anime_id", "title", "score"],
+    columns=["movie_id", "title", "overview"],
     num_results=5,
     query_type="ANN",
     query_vector=query_vector,
 )
-print("Top semantic matches for 'an emotional romance with a sci-fi twist':")
+print("Top semantic matches for 'a heist thriller with a twist ending':")
 for row in (result.result.data_array or []):
     print("  ", row)
 # COMMAND ----------

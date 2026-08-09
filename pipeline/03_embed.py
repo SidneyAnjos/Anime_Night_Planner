@@ -1,26 +1,33 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 03 — Embeddings
+# MAGIC # 03 — Embeddings (Movie Night Planner)
 # MAGIC
-# MAGIC Embeds the unstructured text corpus and stores vectors in `embedding_vector` columns:
+# MAGIC Builds a composite text corpus per movie — **overview + tagline + top keywords + top billed
+# MAGIC cast + review snippets** — and embeds it with the Mosaic AI foundation model
+# MAGIC `databricks-bge-large-en` (1024-dim, pay-as-you-go) into the `movie_embeddings` table.
 # MAGIC
-# MAGIC - **`anime.synopsis`** (falling back to `title` when a synopsis is missing) — primary RAG corpus
-# MAGIC - **`reviews.review`** — user-submitted reviews (secondary corpus)
+# MAGIC `movie_embeddings` is the **source table for the Vector Search index** (step 04), so the
+# MAGIC query-side embedder in the app MUST use the same model — and it does: both call
+# MAGIC `serving_endpoints.invoke("databricks-bge-large-en", …)`, keeping index + query vectors in the
+# MAGIC same space.
 # MAGIC
-# MAGIC Uses the Mosaic AI foundation model `databricks-bge-large-en` (1024-dim, pay-as-you-go) via the
-# MAGIC Databricks SDK. Only rows with a `NULL` embedding are processed, so re-runs are incremental.
+# MAGIC Only movies not already present in `movie_embeddings` are embedded, so re-runs are
+# MAGIC incremental.
 # MAGIC
-# MAGIC **Prerequisite:** Foundation Model API (pay-as-you-go) must be enabled for the workspace.
-# MAGIC If the endpoint is unavailable this notebook fails loudly — the fallback is to self-host a
-# MAGIC small sentence-transformers model, but then the query side in the app must use the same model.
+# MAGIC **Prerequisite:** Foundation Model API (pay-as-you-go) enabled for the workspace.
 # COMMAND ----------
 # MAGIC %python
 from databricks.sdk import WorkspaceClient
+from pyspark.sql import functions as F
 
 w = WorkspaceClient()
 EMBED_ENDPOINT = "databricks-bge-large-en"
 BATCH = 50
 MAX_CHARS = 5000   # keep well under the model's token limit
+TOP_KEYWORDS = 15
+TOP_CAST = 15
+TOP_REVIEWS = 5
+REVIEW_CHARS = 600
 
 
 def embed_texts(texts):
@@ -45,69 +52,129 @@ def embed_texts(texts):
 print(f"Embedding endpoint: {EMBED_ENDPOINT}")
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## 1. Embed `anime.synopsis`
+# MAGIC ## 1. Build the composite text per movie
+# MAGIC
+# MAGIC Join `movies` with aggregated keywords, cast names and review snippets into one `text` column.
 # COMMAND ----------
 # MAGIC %python
-anime_rows = spark.sql("""
-    SELECT anime_id, COALESCE(NULLIF(synopsis, ''), title) AS text
-    FROM anime
-    WHERE embedding_vector IS NULL
-      AND COALESCE(synopsis, title) IS NOT NULL
-""").collect()
-print(f"Anime rows to embed: {len(anime_rows)}")
+kw_agg = (
+    spark.table("keywords")
+    .groupBy("movie_id")
+    .agg(F.collect_list("keyword").alias("kw_list"))
+)
 
-if anime_rows:
-    texts = [r.text for r in anime_rows]
-    vecs = embed_texts(texts)
-    updates = [(r.anime_id, v) for r, v in zip(anime_rows, vecs)]
-    spark.createDataFrame(updates, schema=["anime_id", "embedding_vector"]).createOrReplaceTempView("embed_updates")
-    spark.sql("""
-        MERGE INTO anime AS t
-        USING embed_updates AS s
-        ON t.anime_id = s.anime_id
-        WHEN MATCHED THEN UPDATE SET t.embedding_vector = s.embedding_vector
-    """)
-    print(f"Embedded anime synopses: {len(updates)}")
-else:
-    print("No anime rows need embedding.")
+cast_agg = (
+    spark.table("cast")
+    .filter(F.col("credit_order").isNotNull())
+    .orderBy("movie_id", "credit_order")
+    .groupBy("movie_id")
+    .agg(F.collect_list("name").alias("cast_list"))
+)
+
+review_agg = (
+    spark.table("reviews")
+    .filter(F.col("content").isNotNull() & (F.length("content") > 0))
+    .withColumn("snippet", F.substring("content", 1, REVIEW_CHARS))
+    .groupBy("movie_id")
+    .agg(F.collect_list("snippet").alias("review_list))
+)
+
+base = (
+    spark.table("movies")
+    .select(
+        "movie_id", "title", "overview",
+        F.coalesce("tagline", F.lit("")).alias("tagline"),
+    )
+)
+
+text_df = (
+    base
+    .join(kw_agg, "movie_id", "left")
+    .join(cast_agg, "movie_id", "left")
+    .join(review_agg, "movie_id", "left")
+    .select(
+        "movie_id", "title", "overview",
+        F.concat_ws(
+            " | ",
+            F.col("overview"),
+            F.when(F.length("tagline") > 0, F.col("tagline")).otherwise(F.lit("")),
+            F.when(F.size(F.coalesce("kw_list", F.array())).cast("int") > 0,
+                   F.concat_ws(", ", F.slice(F.coalesce("kw_list", F.array()), 1, TOP_KEYWORDS))
+                  ).otherwise(F.lit("")),
+            F.when(F.size(F.coalesce("cast_list", F.array())).cast("int") > 0,
+                   F.concat_ws(", ", F.slice(F.coalesce("cast_list", F.array()), 1, TOP_CAST))
+                  ).otherwise(F.lit("")),
+            F.when(F.size(F.coalesce("review_list", F.array())).cast("int") > 0,
+                   F.concat_ws(" ", F.slice(F.coalesce("review_list", F.array()), 1, TOP_REVIEWS))
+                  ).otherwise(F.lit("")),
+        ).alias("text"),
+    )
+    .filter(F.col("overview").isNotNull() | (F.length("title") > 0))
+)
+
+# Only movies not already embedded.
+need = (
+    text_df.join(spark.table("movie_embeddings"), "movie_id", "left_anti")
+)
+rows = need.select("movie_id", "title", "overview", "text").collect()
+print(f"Movies to embed: {len(rows)}")
 # COMMAND ----------
 # MAGIC %md
-# MAGIC ## 2. Embed `reviews.review`
+# MAGIC ## 2. Embed + MERGE into `movie_embeddings`
 # COMMAND ----------
 # MAGIC %python
-review_rows = spark.sql("""
-    SELECT review_id, review AS text
-    FROM reviews
-    WHERE embedding_vector IS NULL
-      AND review IS NOT NULL
-      AND LENGTH(review) > 0
-""").collect()
-print(f"Review rows to embed: {len(review_rows)}")
+from pyspark.sql.types import StructType, StructField, LongType, StringType, ArrayType, FloatType, TimestampType
 
-if review_rows:
-    vecs = embed_texts([r.text for r in review_rows])
-    updates = [(r.review_id, v) for r, v in zip(review_rows, vecs)]
-    spark.createDataFrame(updates, schema=["review_id", "embedding_vector"]).createOrReplaceTempView("review_embed_updates")
+now_expr = F.current_timestamp()
+
+if rows:
+    texts = [r.text for r in rows]
+    vecs = embed_texts(texts)
+    if len(vecs) != len(rows):
+        raise RuntimeError(f"Embedding count mismatch: {len(vecs)} vectors for {len(rows)} rows")
+
+    updates = [
+        (r.movie_id, r.title, r.overview, [float(x) for x in v], EMBED_ENDPOINT)
+        for r, v in zip(rows, vecs)
+    ]
+    schema = StructType([
+        StructField("movie_id", LongType(), True),
+        StructField("title", StringType(), True),
+        StructField("overview", StringType(), True),
+        StructField("embedding_vector", ArrayType(FloatType()), True),
+        StructField("embedding_model", StringType(), True),
+    ])
+    spark.createDataFrame(updates, schema=schema).createOrReplaceTempView("embed_updates")
+
     spark.sql("""
-        MERGE INTO reviews AS t
-        USING review_embed_updates AS s
-        ON t.review_id = s.review_id
-        WHEN MATCHED THEN UPDATE SET t.embedding_vector = s.embedding_vector
+        MERGE INTO movie_embeddings AS t
+        USING embed_updates AS s
+        ON t.movie_id = s.movie_id
+        WHEN MATCHED THEN UPDATE SET
+            t.title = s.title,
+            t.overview = s.overview,
+            t.embedding_vector = s.embedding_vector,
+            t.embedding_model = s.embedding_model,
+            t.embedded_at = current_timestamp()
+        WHEN NOT MATCHED THEN INSERT (
+            movie_id, title, overview, embedding_vector, embedding_model, embedded_at
+        ) VALUES (
+            s.movie_id, s.title, s.overview, s.embedding_vector, s.embedding_model, current_timestamp()
+        )
     """)
-    print(f"Embedded reviews: {len(updates)}")
+    print(f"Embedded movies: {len(updates)}")
 else:
-    print("No review rows need embedding.")
+    print("No movies need embedding.")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 3. Log the run
 # COMMAND ----------
 # MAGIC %python
-n_embedded = spark.sql("SELECT count(*) FROM anime WHERE embedding_vector IS NOT NULL").first()[0]
-n_embed_total = n_embedded + spark.sql("SELECT count(*) FROM reviews WHERE embedding_vector IS NOT NULL").first()[0]
-spark.sql("""
+n_embedded = spark.sql("SELECT count(*) FROM movie_embeddings WHERE embedding_vector IS NOT NULL").first()[0]
+spark.sql(f"""
     INSERT INTO pipeline_log (run_id, step, rows, status, ts)
-    SELECT 'embed', '03_embed', ?, 'success', current_timestamp()
-""", args=[n_embed_total])
+    SELECT 'embed', '03_embed', {int(n_embedded)}, 'success', current_timestamp()
+""")
 
-print(f"anime with embeddings: {n_embedded} | reviews with embeddings: {spark.sql('SELECT count(*) FROM reviews WHERE embedding_vector IS NOT NULL').first()[0]}")
+print(f"movie_embeddings with vectors: {n_embedded}")
 print("03 embed complete.")

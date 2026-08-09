@@ -1,9 +1,10 @@
-"""Anime Night Planner — Databricks App (Streamlit).
+"""Movie Night Planner — Databricks App (Streamlit).
 
 Pages:
-- Dashboard  : the selected group's watchlist, ratings and stats (refreshes on every load).
-- Browse     : keyword + semantic search over the anime library.
-- Agent Chat : talk to the agent; it recommends, adds to the watchlist, and logs ratings.
+- Dashboard  : the selected group's watchlist, ratings and recommendations (refreshes on every load).
+- Browse     : keyword + semantic search over the movie library.
+- Agent Chat : talk to the agent; it recommends, adds to the watchlist, logs ratings and records
+               recommendations.
 """
 import pandas as pd
 import streamlit as st
@@ -35,6 +36,16 @@ def render_dashboard(database, group_id):
     st.header("Group dashboard")
     watchlist = database.watchlist(group_id)
     ratings = database.ratings(group_id)
+    recs = database.query(
+        f"""
+        SELECT r.movie_id, m.title, r.reason, r.recommended_at
+        FROM {database.table('recommendations')} r
+        LEFT JOIN {database.table('movies')} m ON r.movie_id = m.movie_id
+        WHERE r.group_id = ?
+        ORDER BY r.recommended_at DESC
+        """,
+        [group_id],
+    )
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Queued", sum(1 for w in watchlist if w["status"] == "queued"))
@@ -56,11 +67,18 @@ def render_dashboard(database, group_id):
     else:
         st.info("No ratings yet — log one in the agent chat.")
 
+    st.subheader("Recommendations")
+    if recs:
+        st.dataframe(pd.DataFrame(recs), use_container_width=True)
+    else:
+        st.info("The agent hasn't recorded any recommendations yet.")
+
 
 def render_browse(database, vs):
-    st.header("Browse anime")
-    keyword = st.text_input("Keyword (title / English title)", value="")
-    sem = st.text_input("Semantic search (describe the mood, e.g. 'a cozy slice of life about food')", value="")
+    st.header("Browse movies")
+    keyword = st.text_input("Keyword (title)", value="")
+    sem = st.text_input("Semantic search (describe the mood, e.g. 'a heist thriller with a twist ending')",
+                        value="")
 
     if sem:
         try:
@@ -73,14 +91,14 @@ def render_browse(database, vs):
         return
 
     sql = (
-        f"SELECT anime_id, title, title_english, score, episodes, genres "
-        f"FROM {database.table('anime')}"
+        f"SELECT movie_id, title, vote_average, runtime, year, genres "
+        f"FROM {database.table('movies')}"
     )
     params = []
     if keyword:
-        sql += " WHERE lower(title) LIKE lower(?) OR lower(title_english) LIKE lower(?)"
+        sql += " WHERE lower(title) LIKE lower(?) OR lower(original_title) LIKE lower(?)"
         params = [f"%{keyword}%", f"%{keyword}%"]
-    sql += " ORDER BY score DESC NULLS LAST LIMIT 200"
+    sql += " ORDER BY vote_average DESC NULLS LAST, vote_count DESC NULLS LAST LIMIT 200"
     rows = database.query(sql, params)
     if not rows:
         st.info("No titles match. Try a different keyword or the semantic search box.")
@@ -92,7 +110,7 @@ def render_browse(database, vs):
 
 def render_chat(database, agent, group_id):
     st.header("Agent chat")
-    st.caption("Plan a night, get recommendations, add to watchlist, log ratings.")
+    st.caption("Plan a night, get recommendations, add to the watchlist, log ratings.")
 
     if "chat_messages" not in st.session_state:
         st.session_state.chat_messages = []
@@ -101,7 +119,7 @@ def render_chat(database, agent, group_id):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    prompt = st.chat_input("e.g. Suggest a short sci-fi anime for tonight — nothing heavy.")
+    prompt = st.chat_input("e.g. Suggest a short thriller under 2 hours for tonight — something with a twist.")
     if prompt:
         st.session_state.chat_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -121,10 +139,10 @@ def render_chat(database, agent, group_id):
 
 
 def main():
-    st.set_page_config(page_title="Anime Night Planner", layout="wide")
+    st.set_page_config(page_title="Movie Night Planner", layout="wide")
     database, vs, agent = _backend()
 
-    st.sidebar.title("🍿 Anime Night Planner")
+    st.sidebar.title("🍿 Movie Night Planner")
     groups = database.groups()
     if not groups:
         st.warning("No groups found. Run the pipeline (pipeline/00_setup_tables) first.")

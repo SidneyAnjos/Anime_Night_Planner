@@ -256,10 +256,10 @@ n_reviews = write_rows("raw_reviews", raw_reviews_rows, ["tmdb_id", "source_url"
 n_providers = write_rows("raw_providers", raw_providers_rows, ["tmdb_id", "source_url", "fetched_at", "payload"])
 
 total_written = n_movies + n_genres + n_credits + n_keywords + n_reviews + n_providers
-spark.sql("""
+spark.sql(f"""
     INSERT INTO pipeline_log (run_id, step, rows, status, ts)
-    SELECT 'ingest', '01_ingest_raw', ?, 'success', current_timestamp()
-""", args=[total_written])
+    SELECT 'ingest', '01_ingest_raw', {int(total_written)}, 'success', current_timestamp()
+""")
 
 print(f"Requests made: {client.requests_made}")
 print(f"Rows written: movies={n_movies}, genres={n_genres}, credits={n_credits}, "

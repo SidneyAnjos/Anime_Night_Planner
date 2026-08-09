@@ -1,8 +1,13 @@
-# This is a Declarative Automation Bundle definition for Anime_Night_Planner.
+# This is a Declarative Automation Bundle definition for Movie_Night_Planner.
 # See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
 
 bundle:
-  name: Anime_Night_Planner
+  name: Movie_Night_Planner
+
+variables:
+  tmdb_secret_scope:
+    description: Databricks secret scope holding the TMDB API key (key name \"tmdb_api_key\").
+    default: movie_night_planner
 
 targets:
   dev:
@@ -10,6 +15,7 @@ targets:
     default: true
     workspace:
       host: https://dbc-1e8b237a-8e29.cloud.databricks.com
+      profile: SidneyAnjos
 
   ## Optionally, there could be 'staging' or 'prod' targets here.
   #
@@ -19,8 +25,8 @@ targets:
 
 resources:
   jobs:
-    anime_pipeline_job:
-      name: anime_pipeline_job
+    movie_pipeline_job:
+      name: movie_pipeline_job
       tasks:
         - task_key: setup
           notebook_task:
@@ -45,14 +51,14 @@ resources:
             notebook_path: ./pipeline/04_vector_index.py
           depends_on:
             - task_key: embed
-      # Nightly refresh (Jikan data + vector index stay current).
+      # Nightly refresh: keep TMDB data + the vector index current.
       schedule:
         quartz_cron_expression: "0 7 3 * * ?"
         timezone_id: UTC
 
   apps:
-    anime-night-planner:
-      name: anime-night-planner
+    movie-night-planner:
+      name: movie-night-planner
       source_code_path: ./app
       config:
         command:
@@ -61,7 +67,7 @@ resources:
           - app.py
         env:
           - name: CATALOG
-            value: anime_night_planner
+            value: movie_night_planner
           - name: SCHEMA
             value: default
           # Http path of the serverless SQL warehouse the app uses for reads AND agent writes.
@@ -72,3 +78,5 @@ resources:
             value: databricks-bge-large-en
           - name: CHAT_ENDPOINT
             value: databricks-meta-llama-3-3-70b-instruct
+        # The app does not need the TMDB key (it only reads from Unity Catalog), so the secret is
+        # NOT mounted here — only the ingest notebook reads it, via dbutils.secrets.get.
