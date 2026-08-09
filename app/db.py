@@ -1,7 +1,15 @@
 """SQL access layer for the app + agent tools.
 
-Connects to a Databricks SQL warehouse via `databricks-sql-connector` using the Databricks Apps
-default service principal (`DATABRICKS_HOST` / `DATABRICKS_TOKEN` are injected at runtime).
+Connects to a Databricks SQL warehouse via `databricks-sql-connector`. Two auth modes,
+tried in order so the same code works both locally under the VS Code extension and as a
+deployed Databricks App:
+
+1. **App service principal (M2M)** — when `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET`
+   are present (Databricks Apps injects these automatically for the app's SP), use
+   `oauth_service_principal` via `databricks.sdk.core.Config`.
+2. **Personal / token** — fall back to `DATABRICKS_TOKEN` (local dev with the VS Code
+   extension, or a PAT). Use `access_token=` directly.
+
 All statements are parameterized with `?` placeholders to keep LLM-sourced writes safe.
 """
 import os
@@ -17,9 +25,27 @@ def _quote(name):
     return f"`{name}`"
 
 
+def _credentials_provider():
+    """Return (kwargs, provider) for dsql.connect, preferring the app SP (M2M) when available."""
+    client_id = _env("DATABRICKS_CLIENT_ID")
+    client_secret = _env("DATABRICKS_CLIENT_SECRET")
+    if client_id and client_secret:
+        # M2M OAuth: Databricks App runtime injected SP credentials.
+        from databricks.sdk.core import Config, oauth_service_principal
+
+        host = _env("DATABRICKS_HOST", "").rstrip("/")
+        if host and not host.startswith("http"):
+            host = f"https://{host}"
+        cfg = Config(host=host, client_id=client_id, client_secret=client_secret)
+        return {"credentials_provider": lambda: oauth_service_principal(cfg)}
+    if _env("DATABRICKS_TOKEN"):
+        return {"access_token": _env("DATABRICKS_TOKEN")}
+    return {}  # let the connector fall back to its default auth chain
+
+
 class Database:
     def __init__(self, host=None, http_path=None, token=None, catalog=None, schema=None):
-        self.host = host or _env("DATABRICKS_HOST", "").replace("https://", "").rstrip("/")
+        self.host = (host or _env("DATABRICKS_HOST", "")).replace("https://", "").rstrip("/")
         self.http_path = http_path or _env("SQL_WAREHOUSE_PATH")
         self.token = token or _env("DATABRICKS_TOKEN")
         self.catalog = catalog or _env("CATALOG", "anime_night_planner")
@@ -32,13 +58,14 @@ class Database:
     def _connect(self):
         if not self.http_path:
             raise RuntimeError(
-                "SQL_WAREHOUSE_PATH is not set — add it to app.yaml (the warehouse's http path)."
+                "SQL_WAREHOUSE_PATH is not set — add it to databricks.yml env (the warehouse's http path)."
             )
-        return dsql.connect(
-            server_hostname=self.host,
-            http_path=self.http_path,
-            access_token=self.token,
-        )
+        connect_kwargs = {
+            "server_hostname": self.host,
+            "http_path": self.http_path,
+        }
+        connect_kwargs.update(_credentials_provider())
+        return dsql.connect(**connect_kwargs)
 
     def query(self, sql, params=None):
         """Run a SELECT and return a list of dicts (lowercased column names)."""
