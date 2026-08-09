@@ -23,6 +23,25 @@ def init(db, vs):
     _vs = vs
 
 
+def backfill_bronze_from_tmdb():
+    """Fetch TMDB bronze data from app compute (has internet) and load it into the 6 bronze tables.
+
+    Runs server-side in the Databricks App to work around the serverless job's lack of outbound
+    internet. Idempotent: only fetches movies not already present in the freshness window.
+    Returns a summary dict for display. NOT an @tool — this is an admin action, not an LLM call.
+    """
+    from tmdb_fetch import fetch_bronze
+    data = fetch_bronze()
+    meta = data.pop("_meta", {})
+    written = {}
+    for table, (rows, columns) in data.items():
+        # Bronze rows are dicts; convert to tuples in column order.
+        tuple_rows = [tuple(r.get(c) for c in columns) for r in rows]
+        written[table] = _db.bulk_insert(table, columns, tuple_rows)
+    return {"written": written, "requests": meta.get("requests", 0),
+            "popular": meta.get("popular", 0), "enriched": meta.get("enriched", 0)}
+
+
 def _movies_by_ids(ids, extra_where=(), extra_params=()):
     """Fetch movie rows by id, preserving an external ordering via a CASE expression."""
     if not ids:

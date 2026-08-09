@@ -108,6 +108,41 @@ def render_browse(database, vs):
     st.dataframe(df, use_container_width=True)
 
 
+def render_admin(database):
+    """Admin / backfill — fetches TMDB bronze from app compute (has outbound internet) because
+    the serverless job compute is network-isolated and can't reach api.themoviedb.org."""
+    st.header("Admin — backfill bronze from TMDB")
+    st.caption(
+        "Serverless job compute can't reach the public internet, so TMDB is fetched here in the "
+        "app and written to the raw_* bronze tables. After this completes, kick off the pipeline "
+        "(transform → embed → index) to populate silver + vectors."
+    )
+
+    counts = database.query(
+        f"""
+        SELECT 'raw_movies'    AS t, COUNT(*) AS n FROM {database.table('raw_movies')}    UNION ALL
+        SELECT 'raw_credits'              , COUNT(*)   FROM {database.table('raw_credits')}   UNION ALL
+        SELECT 'raw_keywords'             , COUNT(*)   FROM {database.table('raw_keywords')}  UNION ALL
+        SELECT 'raw_reviews'              , COUNT(*)   FROM {database.table('raw_reviews')}   UNION ALL
+        SELECT 'raw_providers'            , COUNT(*)   FROM {database.table('raw_providers')} UNION ALL
+        SELECT 'raw_genres'               , COUNT(*)   FROM {database.table('raw_genres')}
+        """
+    )
+    df = pd.DataFrame(counts)
+    st.subheader("Current bronze counts")
+    st.dataframe(df, use_container_width=True)
+
+    if st.button("Backfill bronze from TMDB", type="primary"):
+        with st.spinner("Fetching from TMDB and writing bronze… this takes a few minutes (~1300 calls)."):
+            try:
+                result = tools.backfill_bronze_from_tmdb()
+                st.success("Backfill complete.")
+                st.json(result)
+                st.info("Now re-run the pipeline job (transform → embed → index) to build silver + vectors.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Backfill failed: {exc!r}")
+
+
 def render_chat(database, agent, group_id):
     st.header("Agent chat")
     st.caption("Plan a night, get recommendations, add to the watchlist, log ratings.")
@@ -151,13 +186,15 @@ def main():
     selected = st.sidebar.selectbox("Group", names)
     group_id = next(g["group_id"] for g in groups if g["name"] == selected)
 
-    page = st.sidebar.radio("Page", ["Dashboard", "Browse", "Agent Chat"])
+    page = st.sidebar.radio("Page", ["Dashboard", "Browse", "Agent Chat", "Admin"])
     if page == "Dashboard":
         render_dashboard(database, group_id)
     elif page == "Browse":
         render_browse(database, vs)
-    else:
+    elif page == "Agent Chat":
         render_chat(database, agent, group_id)
+    else:
+        render_admin(database)
 
 
 main()
