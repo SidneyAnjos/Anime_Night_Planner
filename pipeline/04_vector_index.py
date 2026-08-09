@@ -61,8 +61,10 @@ else:
 # MAGIC
 # MAGIC Self-managed embeddings: `movie_embeddings.embedding_vector` already holds the 1024-dim
 # MAGIC vector (computed in step 03). The index syncs the precomputed vector column
-# MAGIC (`embedding_vector_columns`), not a text source column. A CONTINUOUS pipeline keeps the
-# MAGIC index up to date as movie_embeddings changes.
+# MAGIC (`embedding_vector_columns` with `embedding_dimension=1024`), not a text source column.
+# MAGIC We use a TRIGGERED pipeline (not CONTINUOUS) — this workspace does not support CONTINUOUS
+# MAGIC Vector Search pipelines (`Pipeline type CONTINUOUS is not supported for this workspace`),
+# MAGIC and TRIGGERED is fine for a ~400-row catalog that the nightly job re-syncs.
 # COMMAND ----------
 # MAGIC %python
 # Idempotency: trying create_index on an existing index throws "already exists", which
@@ -77,8 +79,9 @@ try:
         index_type=VectorIndexType.DELTA_SYNC,
         delta_sync_index_spec=DeltaSyncVectorIndexSpecRequest(
             source_table=SOURCE_TABLE,
-            pipeline_type=PipelineType.CONTINUOUS,
-            embedding_vector_columns=[EmbeddingVectorColumn(name="embedding_vector")],
+            pipeline_type=PipelineType.TRIGGERED,
+            embedding_vector_columns=[EmbeddingVectorColumn(
+                name="embedding_vector", embedding_dimension=1024)],
         ),
     )
     print("Index create request sent.")
@@ -88,6 +91,14 @@ except Exception as exc:  # noqa: BLE001 - already exists / race -> fine
         print(f"Index '{INDEX_NAME}' already exists.")
     else:
         print(f"create_index returned: {exc!r}")
+
+# A TRIGGERED index doesn't auto-sync on create — kick off the first sync so the
+# readiness poll below actually has rows to index.
+try:
+    w.vector_search_indexes.sync_index(index_name=INDEX_NAME)
+    print("Index sync triggered.")
+except Exception as exc:  # noqa: BLE001 - sync may already be running / index just created
+    print(f"sync_index returned: {exc!r}")
 
 # Poll readiness by reading get_index().status.ready (databricks-sdk 0.125 has no
 # wait_get_index_ready helper). Vector Search provisioning can take several minutes.
