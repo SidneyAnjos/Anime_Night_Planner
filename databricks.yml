@@ -65,9 +65,8 @@ resources:
           - name: SCHEMA
             value: default
           # Http path of the serverless SQL warehouse the app uses for reads AND agent writes.
-          # Replace with your warehouse's http path from the "Connection details" tab.
           - name: SQL_WAREHOUSE_PATH
-            value: /sql/1.0/warehouses/REPLACE_ME
+            value: /sql/1.0/warehouses/eb31d64c1ca0b603
           # Mosaic AI foundation model endpoints (pay-as-you-go).
           - name: EMBED_ENDPOINT
             value: databricks-bge-large-en
