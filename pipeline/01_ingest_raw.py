@@ -202,14 +202,39 @@ for g in genres:
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 3. Fetch popular movies (primary source for our curated subset)
+# MAGIC
+# MAGIC **CRITICAL FIX:** We first fetch IDs from `/discover/movie` (list endpoint), then for each
+# ID we fetch the **`/movie/{id}` DETAIL** endpoint. The detail payload contains `runtime` (int)
+# and `genres:[{id,name}]` — the list payload has only `genre_ids:[int]` and NO runtime/genres.
+# The silver transform (02_transform_silver.py) parses `raw_movies.payload` expecting the detail
+# shape. Storing the list payload causes `from_json` to silently NULL runtime and empty genres
+# for ALL movies.
 # COMMAND ----------
 # MAGIC %python
-def collect_movies(items):
-    for it in items:
-        add_movie_payload(it, it.get("url") or f"https://www.themoviedb.org/movie/{it.get('id')}")
+# Collect just the movie IDs from the popular list (lightweight call).
+popular_ids = []
 
-n_popular = client.paginated("/discover/movie", collect_movies, POPULAR_MAX_PAGES, sort_by="popularity.desc")
-print(f"Popular movies fetched: {n_popular} (new bronze rows so far: {len(raw_movies_rows)})")
+def collect_ids(items):
+    for it in items:
+        mid = it.get("id")
+        if mid is not None:
+            popular_ids.append(mid)
+
+n_popular = client.paginated("/discover/movie", collect_ids, POPULAR_MAX_PAGES, sort_by="popularity.desc")
+print(f"Popular movie IDs collected: {len(popular_ids)}")
+
+# Now fetch /movie/{id} DETAIL for each ID and store as raw_movies.
+raw_movies_rows = []
+for i, mid in enumerate(popular_ids):
+    if mid in seen_movies:
+        continue
+    detail = client.get(f"/movie/{mid}", allow_missing=True)
+    if detail:
+        add_movie_payload(detail, f"{BASE}/movie/{mid}")
+    if (i + 1) % 25 == 0:
+        print(f"  Fetched detail for {i + 1}/{len(popular_ids)} popular movies")
+
+print(f"raw_movies: will write {len(raw_movies_rows)} new detail rows")
 # COMMAND ----------
 # MAGIC %md
 # MAGIC ## 4. Write raw_movies + raw_genres (bronze)

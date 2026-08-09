@@ -117,7 +117,7 @@ def search_movies_semantic(query: str, max_runtime: int = 0, genre: str = "", li
     # Re-rank the (possibly filtered) rows by semantic similarity.
     sim = {int(c["movie_id"]): c["_similarity"] for c in candidates}
     rows.sort(key=lambda r: sim.get(r["movie_id"], float("inf")))
-    return json.dumps(_summarize(rows[:limit]), ensure_ascii=False)
+    return json.dumps(_summarize(rows[:limit]), ensure_ascii=False, default=str)
 
 
 @tool

@@ -116,6 +116,12 @@ def fetch_bronze():
         raw_reviews: {tmdb_id, review_id, source_url, fetched_at, payload}
         raw_genres: {genre_id, source_url, fetched_at, payload}
 
+    CRITICAL: raw_movies MUST contain the /movie/{id} DETAIL payload (has runtime + genres
+    objects), NOT the /discover/movie list payload (only genre_ids:[int], NO runtime/genres).
+    The silver transform (02_transform_silver.py) parses raw_movies.payload expecting the
+    detail shape. Storing the list payload causes from_json to silently NULL runtime and empty
+    genres for ALL movies.
+
     Respects the 24h freshness window: a movie already present (fetched within
     FRESHNESS_HOURS) is skipped, so re-runs only fetch what's missing.
     """
@@ -149,17 +155,32 @@ def fetch_bronze():
         genres_rows.append({"genre_id": g["id"], "source_url": f"{BASE}/genre/movie/list",
                             "fetched_at": now_utc(), "payload": json.dumps(g)})
 
-    # 2. Popular movies.
-    def collect(items):
+    # 2. Popular movies: collect IDs from /discover/movie (list), then fetch DETAIL for each.
+    popular_ids = []
+
+    def collect_ids(items):
         for it in items:
-            add_movie(
-                it,
-                it.get("url") or f"https://www.themoviedb.org/movie/{it.get('id')}",
-            )
-    n_popular = client.paginated("/discover/movie", collect, POPULAR_MAX_PAGES,
+            mid = it.get("id")
+            if mid is not None:
+                popular_ids.append(mid)
+
+    n_popular = client.paginated("/discover/movie", collect_ids, POPULAR_MAX_PAGES,
                                  sort_by="popularity.desc")
 
-    # 3. Enrich top N movies.
+    # 3. Fetch /movie/{id} DETAIL for each popular ID, store as raw_movies.
+    # This is the critical fix: the detail payload has runtime (int) and genres:[{id,name}],
+    # while the list payload has only genre_ids:[int] and NO runtime.
+    for i, mid in enumerate(popular_ids):
+        if mid in seen_movies:
+            continue
+        detail = client.get(f"/movie/{mid}", allow_missing=True)
+        if detail:
+            add_movie(detail, f"{BASE}/movie/{mid}")
+        if (i + 1) % 25 == 0:
+            print(f"  Fetched detail for {i + 1}/{len(popular_ids)} popular movies")
+
+    # 4. Enrich top N movies (credits/keywords/reviews/providers).
+    # Note: detail fetch already called above, so we don't re-call /movie/{id} here.
     enrich_ids = [mid for mid in list(seen_movies)][:ENRICHMENT_LIMIT]
     for i, mid in enumerate(enrich_ids):
         cdata = client.get(f"/movie/{mid}/credits", allow_missing=True)
