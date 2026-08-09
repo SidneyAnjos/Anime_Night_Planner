@@ -44,16 +44,20 @@ class VectorStore:
         return list(resp.data[0].embedding)
 
     def search(self, query_text, columns=None, num_results=10):
-        """Return a list of dicts: {'movie_id': ..., <columns...>, '_similarity': <distance>}.
+        """Return a list of dicts: {'movie_id': ..., 'title', 'overview', 'vote_average',
+        'runtime', 'genres', '_similarity': <distance>}.
 
-        The index returns the primary key first, the requested columns next, and the similarity
-        distance last — mapped here into clean dicts.
+        The Vector Search index only syncs the columns present on the source `movie_embeddings`
+        table — `movie_id` (pk), `title`, `overview` — so we query those from the index and then
+        enrich each match with the richer catalog attributes (`vote_average`, `runtime`, `genres`)
+        from the `movies` table by movie_id. Asking the index for columns it doesn't sync raises
+        "Requested columns to fetch are not present in index".
         """
-        columns = columns or ["title", "vote_average", "runtime", "genres"]
+        indexed_cols = ["movie_id", "title", "overview"]
         query_vector = self.embed(query_text)
         res = self._workspace().vector_search_indexes.query_index(
             index_name=self.index_name,
-            columns=columns,
+            columns=indexed_cols,
             num_results=num_results,
             query_type="ANN",
             query_vector=query_vector,
@@ -61,9 +65,35 @@ class VectorStore:
         rows = _extract_rows(res)
         parsed = []
         for row in rows:
-            item = {"movie_id": row[0]}
-            for name, val in zip(columns, row[1:-1]):
+            # Row layout: [movie_id, title, overview, <similarity>]. The requested columns
+            # are returned in order with the similarity distance appended last.
+            item = {}
+            for name, val in zip(indexed_cols, row[:-1]):
                 item[name] = val
-            item["_similarity"] = row[-1] if len(row) >= len(columns) + 2 else None
+            item["_similarity"] = row[-1] if len(row) == len(indexed_cols) + 1 else None
             parsed.append(item)
+
+        # Enrich: join genres / runtime / vote_average from `movies` (not in the index).
+        ids = [it["movie_id"] for it in parsed if it.get("movie_id") is not None]
+        if ids:
+            db = self._db_for_enrich()
+            extra = db.query(
+                f"SELECT movie_id, vote_average, runtime, genres FROM {db.table('movies')} "
+                "WHERE movie_id IN (%s)" % ", ".join(["?"] * len(ids)),
+                ids,
+            )
+            by_id = {e["movie_id"]: e for e in extra}
+            for it in parsed:
+                e = by_id.get(it["movie_id"])
+                if e:
+                    it["vote_average"] = e.get("vote_average")
+                    it["runtime"] = e.get("runtime")
+                    it["genres"] = e.get("genres")
         return parsed
+
+    def _db_for_enrich(self):
+        """Lazy Database instance for the `movies` enrichment join (avoids import cycle)."""
+        import db as db_mod  # noqa: WPS433 (local import to avoid cycle at module load)
+        if getattr(self, "_db", None) is None:
+            self._db = db_mod.Database()
+        return self._db
