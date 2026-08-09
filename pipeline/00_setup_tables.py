@@ -177,6 +177,11 @@ for name, stmt in DDL.items():
     spark.sql(stmt)
     print(f"OK  {name}")
 
+# Enable Change Data Feed on the `anime` table (required by the Delta-sync Vector Search index).
+# Idempotent: ALTER is safe even if the property is already set.
+spark.sql(f"ALTER TABLE `{catalog}`.`{schema}`.anime SET TBLPROPERTIES ('delta.enableChangeDataFeed' = true)")
+print("OK  anime (delta.enableChangeDataFeed = true)")
+
 print("\nTables in current schema:")
 for row in spark.sql("SHOW TABLES").collect():
     print(" -", row.tableName)
