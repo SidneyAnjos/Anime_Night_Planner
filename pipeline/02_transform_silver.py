@@ -75,8 +75,13 @@ movies_updates = movie_src.select(
     F.col("runtime"),
     F.col("vote_average"),
     F.col("vote_count"),
-    F.to_date(F.col("release_date")).alias("release_date"),
-    F.year(F.to_date(F.col("release_date"))).alias("year"),
+    # TMDB sometimes returns release_date="" (empty string) for upcoming/unknown
+    # releases; F.to_date("") raises CAST_INVALID_INPUT and aborts the whole MERGE.
+    # Null it out (only cast non-empty strings) -> NULL release_date + year is fine.
+    F.when(F.length(F.col("release_date")) > 0, F.to_date(F.col("release_date")))
+     .otherwise(F.lit(None).cast("date")).alias("release_date"),
+    F.when(F.length(F.col("release_date")) > 0, F.year(F.to_date(F.col("release_date"))))
+     .otherwise(F.lit(None).cast("int")).alias("year"),
     F.col("poster_path"),
     F.col("backdrop_path"),
     F.coalesce(
