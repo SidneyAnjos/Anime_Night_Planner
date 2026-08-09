@@ -29,7 +29,7 @@ def ensure_catalog_schema():
         catalog = FALLBACK_CATALOG
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{SCHEMA}")
     spark.sql(f"USE {catalog}.{SCHEMA}")
-    print(f"Using catalog='{catalog}', schema='{schema}'")
+    print(f"Using catalog='{catalog}', schema='{SCHEMA}'")
     return catalog, SCHEMA
 
 
