@@ -18,6 +18,14 @@
 # MAGIC - `/genre/movie/list`      → id + name
 # COMMAND ----------
 # MAGIC %python
+# In a multi-task job each task runs in its own Spark session, so the USE CATALOG done
+# in 00_setup does NOT carry over. Force the Movie Night Planner catalog/schema so the
+# unqualified table references (raw_movies, movies, cast, …) resolve correctly.
+spark.sql("USE CATALOG movie_night_planner")
+spark.sql("USE movie_night_planner.default")
+print("Using catalog='movie_night_planner', schema='default'")
+# COMMAND ----------
+# MAGIC %python
 from pyspark.sql.types import (
     StructType, StructField, StringType, LongType, IntegerType, DoubleType, ArrayType, DateType,
 )

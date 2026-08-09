@@ -25,8 +25,12 @@ from databricks.sdk.service.vectorsearch import (
 
 w = WorkspaceClient()
 
-catalog = spark.catalog.currentCatalog()
-schema = spark.catalog.currentDatabase()
+# Force the Movie Night Planner catalog/schema explicitly. (In a multi-task job each task
+# runs in its own Spark session, so 00_setup's USE CATALOG does not carry over. Relying on
+# spark.catalog.currentCatalog()/currentDatabase() would resolve to the workspace default
+# and point the index at the wrong catalog.)
+catalog = "movie_night_planner"
+schema = "default"
 ENDPOINT_NAME = "movie_vector_search_endpoint"
 INDEX_NAME = f"{catalog}.{schema}.movie_embeddings_index"
 SOURCE_TABLE = f"{catalog}.{schema}.movie_embeddings"
@@ -109,8 +113,8 @@ for row in (result.result.data_array or []):
 # MAGIC ## 4. Log the run
 # COMMAND ----------
 # MAGIC %python
-spark.sql("""
-    INSERT INTO pipeline_log (run_id, step, rows, status, ts)
+spark.sql(f"""
+    INSERT INTO {catalog}.{schema}.pipeline_log (run_id, step, rows, status, ts)
     SELECT 'index', '04_vector_index', 0, 'success', current_timestamp()
 """)
 print("04 vector index complete.")

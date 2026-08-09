@@ -17,6 +17,14 @@
 # MAGIC **Prerequisite:** Foundation Model API (pay-as-you-go) enabled for the workspace.
 # COMMAND ----------
 # MAGIC %python
+# In a multi-task job each task runs in its own Spark session, so the USE CATALOG done
+# in 00_setup does NOT carry over. Force catalog/schema so the unqualified table
+# references (movies, keywords, cast, reviews, movie_embeddings, pipeline_log) resolve.
+spark.sql("USE CATALOG movie_night_planner")
+spark.sql("USE movie_night_planner.default")
+print("Using catalog='movie_night_planner', schema='default'")
+# COMMAND ----------
+# MAGIC %python
 from databricks.sdk import WorkspaceClient
 from pyspark.sql import functions as F
 
