@@ -24,25 +24,25 @@ resources:
       tasks:
         - task_key: setup
           notebook_task:
-            notebook_path: ./pipeline/00_setup_tables
+            notebook_path: ./pipeline/00_setup_tables.py
         - task_key: ingest
           notebook_task:
-            notebook_path: ./pipeline/01_ingest_raw
+            notebook_path: ./pipeline/01_ingest_raw.py
           depends_on:
             - task_key: setup
         - task_key: transform
           notebook_task:
-            notebook_path: ./pipeline/02_transform_silver
+            notebook_path: ./pipeline/02_transform_silver.py
           depends_on:
             - task_key: ingest
         - task_key: embed
           notebook_task:
-            notebook_path: ./pipeline/03_embed
+            notebook_path: ./pipeline/03_embed.py
           depends_on:
             - task_key: transform
         - task_key: index
           notebook_task:
-            notebook_path: ./pipeline/04_vector_index
+            notebook_path: ./pipeline/04_vector_index.py
           depends_on:
             - task_key: embed
       # Nightly refresh (Jikan data + vector index stay current).
@@ -52,5 +52,27 @@ resources:
 
   apps:
     anime-night-planner:
-      source: ./app
-      config: app.yaml
+      name: anime-night-planner
+      config:
+        command: streamlit run app.py
+        env:
+          - name: CATALOG
+            value: anime_night_planner
+          - name: SCHEMA
+            value: default
+          # Http path of the serverless SQL warehouse the app uses for reads AND agent writes.
+          # Replace with your warehouse's http path from the "Connection details" tab.
+          - name: SQL_WAREHOUSE_PATH
+            value: /sql/1.0/warehouses/REPLACE_ME
+          # Mosaic AI foundation model endpoints (pay-as-you-go).
+          - name: EMBED_ENDPOINT
+            value: databricks-bge-large-en
+          - name: CHAT_ENDPOINT
+            value: databricks-meta-llama-3-3-70b-instruct
+        resources:
+          requests:
+            memory: 2Gi
+            cpu: "1.0"
+          limits:
+            memory: 4Gi
+            cpu: "2.0"
