@@ -1,28 +1,3 @@
-# This is a Declarative Automation Bundle definition for Movie_Night_Planner.
-# See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
-
-bundle:
-  name: Movie_Night_Planner
-
-variables:
-  tmdb_secret_scope:
-    description: Databricks secret scope holding the TMDB API key (key name \"tmdb_api_key\").
-    default: movie_night_planner
-
-targets:
-  dev:
-    mode: development
-    default: true
-    workspace:
-      host: https://dbc-1e8b237a-8e29.cloud.databricks.com
-      profile: SidneyAnjos
-
-  ## Optionally, there could be 'staging' or 'prod' targets here.
-  #
-  # prod:
-  #   workspace:
-  #     host: https://dbc-1e8b237a-8e29.cloud.databricks.com
-
 resources:
   jobs:
     movie_pipeline_job:
@@ -51,7 +26,6 @@ resources:
             notebook_path: ./pipeline/04_vector_index.py
           depends_on:
             - task_key: embed
-      # Nightly refresh: keep TMDB data + the vector index current.
       schedule:
         quartz_cron_expression: "0 7 3 * * ?"
         timezone_id: UTC
@@ -73,15 +47,9 @@ resources:
           # Http path of the serverless SQL warehouse the app uses for reads AND agent writes.
           - name: SQL_WAREHOUSE_PATH
             value: /sql/1.0/warehouses/eb31d64c1ca0b603
-          # Mosaic AI foundation model endpoints (pay-as-you-go).
           - name: EMBED_ENDPOINT
             value: databricks-bge-large-en
           - name: CHAT_ENDPOINT
             value: databricks-meta-llama-3-3-70b-instruct
-          # TMDB key, mounted from the secret scope. The serverless job compute is network-isolated
-          # (no outbound internet), so the ingest notebook can't reach api.themoviedb.org; instead the
-          # app fetches TMDB from app compute (which has egress) on the Admin page and loads bronze via
-          # the SQL warehouse. Secret refs in app env use {{secrets/<scope>/<key>}}.
           - name: TMDB_API_KEY
             value: "{{secrets/movie_night_planner/tmdb_api_key}}"
-        # The app also backfills bronze from TMDB (see tmdb_fetch.py + the Admin page).
