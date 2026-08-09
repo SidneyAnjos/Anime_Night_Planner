@@ -1,5 +1,4 @@
 # This is a Declarative Automation Bundle definition for Anime_Night_Planner.
-# The Databricks extension requires databricks.yml configuration file.
 # See https://docs.databricks.com/dev-tools/bundles/index.html for documentation.
 
 bundle:
@@ -17,3 +16,41 @@ targets:
   # prod:
   #   workspace:
   #     host: https://dbc-1e8b237a-8e29.cloud.databricks.com
+
+resources:
+  jobs:
+    anime_pipeline_job:
+      name: anime_pipeline_job
+      tasks:
+        - task_key: setup
+          notebook_task:
+            notebook_path: ./pipeline/00_setup_tables
+        - task_key: ingest
+          notebook_task:
+            notebook_path: ./pipeline/01_ingest_raw
+          depends_on:
+            - task_key: setup
+        - task_key: transform
+          notebook_task:
+            notebook_path: ./pipeline/02_transform_silver
+          depends_on:
+            - task_key: ingest
+        - task_key: embed
+          notebook_task:
+            notebook_path: ./pipeline/03_embed
+          depends_on:
+            - task_key: transform
+        - task_key: index
+          notebook_task:
+            notebook_path: ./pipeline/04_vector_index
+          depends_on:
+            - task_key: embed
+      # Nightly refresh (Jikan data + vector index stay current).
+      schedule:
+        quartz_cron_expression: "0 7 3 * * ?"
+        timezone_id: UTC
+
+  apps:
+    anime-night-planner:
+      source: ./app
+      config: app.yaml
