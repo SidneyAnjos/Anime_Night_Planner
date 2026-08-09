@@ -1,0 +1,8 @@
+streamlit>=1.36
+databricks-sql-connector>=3.5
+databricks-vectorsearch>=0.40
+databricks-sdk>=0.125
+langchain>=0.3
+langchain-community>=0.3
+langchain-core>=0.3
+requests>=2.31

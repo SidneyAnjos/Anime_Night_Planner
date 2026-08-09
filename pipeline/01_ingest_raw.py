@@ -49,7 +49,7 @@ class JikanClient:
                     timeout=30,
                     headers={"Accept": "application/json"},
                 )
-                if resp.status_code in (429, 503):          # rate-limited / overloaded
+                if resp.status_code == 429 or resp.status_code >= 500:   # rate-limited / flaky edge
                     raise requests.HTTPError(f"HTTP {resp.status_code}")
                 if resp.status_code == 404 and allow_missing:
                     return None
