@@ -86,23 +86,22 @@ class Database:
     def bulk_insert(self, table, columns, rows):
         """Insert many rows (list of tuples in `columns` order) in batches.
 
-        Uses a parameterized multi-row VALUES list so LLM-/fetch-sourced payloads are
-        bound, not interpolated. Values come in as Python objects; the connector handles
-        type conversion; `payload` columns are JSON strings.
+        Uses a parameterized multi-row VALUES list so fetch-sourced payloads are bound,
+        not interpolated. Values come in as Python objects; the connector handles type
+        conversion; `payload` columns are JSON strings.
         """
         if not rows:
             return 0
         col_sql = ", ".join(_quote(c) for c in columns)
+        one_row = "(" + ", ".join(["?"] * len(columns)) + ")"
         total = 0
         batch = 500
         with self._connect() as conn:
             with conn.cursor() as cur:
                 for i in range(0, len(rows), batch):
                     chunk = rows[i:i + batch]
-                    placeholders = ", ".join(["(" + ", ".join(["?"] * len(columns)) + ")"])
-                    sql = f"INSERT INTO {self.table(table)} ({col_sql}) VALUES " + \
-                          ", ".join(["(" + ", ".join(["?"] * len(columns)) + ")"] * len(
-                              chunk))
+                    sql = (f"INSERT INTO {self.table(table)} ({col_sql}) VALUES "
+                           + ", ".join([one_row] * len(chunk)))
                     params = [v for row in chunk for v in row]
                     cur.execute(sql, params)
                     total += len(chunk)

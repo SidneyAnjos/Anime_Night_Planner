@@ -21,7 +21,6 @@ import os
 import time
 
 import requests
-from databricks.sdk import WorkspaceClient
 
 BASE = "https://api.themoviedb.org/3"
 POPULAR_MAX_PAGES = 25          # up to ~500 popular movies
@@ -31,19 +30,20 @@ FRESHNESS_HOURS = 24            # re-fetch after this many hours
 
 
 def _get_tmdb_key():
-    """Read the TMDB key from the Databricks secret scope (app runtime) or an env var (local dev)."""
-    env = os.environ.get("TMDB_API_KEY")
-    if env:
-        return env
-    try:
-        ws = WorkspaceClient()
-        # secret scope created by `databricks secrets create-scope movie_night_planner`
-        return ws.secrets.get_secret("movie_night_planner", "tmdb_api_key").value
-    except Exception as exc:  # noqa: BLE001
+    """Read the TMDB key from the TMDB_API_KEY env var.
+
+    In the deployed Databricks App this is mounted from the secret scope via a
+    `{{secrets/movie_night_planner/tmdb_api_key}}` reference in databricks.yml
+    (secrets can't be read via the SDK from a non-notebook app context). For local
+    dev, just export TMDB_API_KEY.
+    """
+    key = os.environ.get("TMDB_API_KEY")
+    if not key:
         raise RuntimeError(
-            "Could not read TMDB key: set TMDB_API_KEY env var or ensure the "
-            "'movie_night_planner' secret scope has a 'tmdb_api_key' secret."
-        ) from exc
+            "TMDB_API_KEY is not set. The app mounts it from the "
+            "'movie_night_planner' secret scope; locally, export TMDB_API_KEY."
+        )
+    return key
 
 
 def now_utc():
