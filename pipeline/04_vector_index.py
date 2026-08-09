@@ -14,9 +14,9 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.vectorsearch import (
     EndpointType,
     VectorIndexType,
+    PipelineType,
     DeltaSyncVectorIndexSpecRequest,
-    EmbeddingSourceColumn,
-    QueryType,
+    EmbeddingVectorColumn,
 )
 
 w = WorkspaceClient()
