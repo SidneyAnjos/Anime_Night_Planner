@@ -71,7 +71,6 @@ DDL = {
     "raw_reviews": """
         CREATE TABLE IF NOT EXISTS raw_reviews (
             tmdb_id      BIGINT,
-            review_id    STRING,
             source_url   STRING,
             fetched_at   TIMESTAMP,
             payload      STRING
