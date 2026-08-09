@@ -1,21 +1,74 @@
 """The Movie Night Planner agent.
 
 A small, self-contained ReAct loop (Thought / Action / Action Input / Observation /
-Final Answer) on top of ChatDatabricks (Mosaic AI foundation chat model) and the tools in
-`tools.py`. Kept framework-light on purpose: it needs no tool-calling API from the model, handles
+Final Answer) on top of a Mosaic AI foundation chat model and the tools in `tools.py`.
+Kept framework-light on purpose: it needs no tool-calling API from the model, handles
 multi-argument tools via JSON action inputs, and is easy to follow in a demo. It both READS
 (semantic search, trending, details, history) and WRITES (watchlist, ratings, recommendations).
+
+The chat model is called directly via `WorkspaceClient.serving_endpoints.query()` (the same
+stable SDK API the app already uses for embeddings), NOT through `ChatDatabricks` from the
+langchain ecosystem — `ChatDatabricks` moved between langchain packages across versions and
+the loose `langchain>=0.3` pins let pip resolve an incompatible mix (langchain-core 0.3.x
+clashing with the langchain-classic/langgraph 1.x that ships in the app's base venv),
+which crashed the app at startup. Talking to the foundation model endpoint directly removes
+that whole dependency surface.
 """
 import json
 import os
 import re
 
-from langchain_community.chat_models import ChatDatabricks
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 import tools
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 
 CHAT_ENDPOINT = os.environ.get("CHAT_ENDPOINT", "databricks-meta-llama-3-3-70b-instruct")
+
+
+class _Chat:
+    """Minimal blocking chat wrapper around `serving_endpoints.query`.
+
+    Exposes `.invoke(messages)` returning an object with `.content` so the ReAct loop below
+    reads exactly like a langchain chat model. Messages are langchain message objects; we
+    normalize them to the `[{role, content}, ...]` list the Foundation Model API expects.
+    """
+
+    def __init__(self, endpoint=CHAT_ENDPOINT, temperature=0.3, max_tokens=800):
+        self.endpoint = endpoint
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self._client = WorkspaceClient()  # auth via the app SP (M2M) in app runtime, or local profile
+
+    def invoke(self, messages):
+        # Map langchain message types -> the Foundation Model API role enum.
+        role_map = {"system": ChatMessageRole.SYSTEM, "human": ChatMessageRole.USER,
+                    "user": ChatMessageRole.USER, "ai": ChatMessageRole.ASSISTANT,
+                    "assistant": ChatMessageRole.ASSISTANT}
+        payload = []
+        for m in messages:
+            role = (getattr(m, "type", None) or "user")
+            cr = role_map.get(role, ChatMessageRole.USER)
+            payload.append(ChatMessage(role=cr, content=str(m.content)))
+        resp = self._client.serving_endpoints.query(
+            name=self.endpoint,
+            messages=payload,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+        )
+        # Chat completions response shape: resp.choices[0].message.content
+        content = ""
+        try:
+            content = resp.choices[0].message.content or ""
+        except (IndexError, AttributeError, TypeError):
+            content = ""
+        return _ChatResult(content)
+
+
+class _ChatResult:
+    def __init__(self, content):
+        self.content = content
 
 SYSTEM_PROMPT = """You are the Movie Night Planner agent. You help a group of friends pick what to
 watch tonight and keep track of their watchlist, ratings and recommendations.
@@ -80,7 +133,7 @@ def _parse_action(text):
 
 class Agent:
     def __init__(self, llm=None, max_steps=8):
-        self.llm = llm or ChatDatabricks(endpoint=CHAT_ENDPOINT, temperature=0.3, max_tokens=800)
+        self.llm = llm or _Chat(endpoint=CHAT_ENDPOINT, temperature=0.3, max_tokens=800)
         self.max_steps = max_steps
         self.registry = {t.name: t for t in tools.TOOLS}
 

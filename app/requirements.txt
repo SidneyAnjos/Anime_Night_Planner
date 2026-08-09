@@ -1,6 +1,11 @@
 streamlit>=1.36
 databricks-sql-connector>=3.5
 databricks-sdk>=0.125
-langchain>=0.3
-langchain-community>=0.3
-langchain-core>=0.3
+requests>=2.27
+# Only langchain-core's message dataclasses (SystemMessage/HumanMessage/AIMessage) are
+# used by the agent — the chat model is called directly via serving_endpoints.query, so we
+# do NOT pull langchain / langchain-community / langchain-databricks (whose loose >=0.3 pins
+# let pip mix langchain-core 0.3.x with the langchain-classic/langgraph 1.x that ships in the
+# app's base venv, crashing the app at startup). langchain-core 1.5.3 is already present in
+# the base venv; pinning an exact, base-compatible version keeps the message imports stable.
+langchain-core>=1.4,<2
