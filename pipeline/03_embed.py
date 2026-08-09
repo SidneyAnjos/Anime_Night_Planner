@@ -30,12 +30,16 @@ from pyspark.sql import functions as F
 
 w = WorkspaceClient()
 EMBED_ENDPOINT = "databricks-bge-large-en"
-BATCH = 50
+# Smaller batches keep each serving-endpoint call well under the SDK's ~5-min
+# retry_timeout_seconds ceiling — larger batches (50x ~5000-char texts) can exceed it on
+# the pay-as-you-go foundation-model endpoint and raise `TimeoutError: Timed out after 0:05:00`.
+BATCH = 16
 MAX_CHARS = 5000   # keep well under the model's token limit
 TOP_KEYWORDS = 15
 TOP_CAST = 15
 TOP_REVIEWS = 5
 REVIEW_CHARS = 600
+MAX_CALL_RETRIES = 4    # per-batch retries on timeout/transport errors
 
 
 def embed_texts(texts):
@@ -49,14 +53,27 @@ def embed_texts(texts):
     if not texts:
         return []
     vectors = []
+    import time as _time
     for i in range(0, len(texts), BATCH):
         batch = [t[:MAX_CHARS] for t in texts[i:i + BATCH]]
-        resp = w.serving_endpoints.query(name=EMBED_ENDPOINT, input=batch)
-        data = getattr(resp, "data", None)
-        if not data:
-            raise RuntimeError(f"No embedding data returned for batch {i // BATCH}")
-        # elements are returned in input order; extract the .embedding vector from each
-        vectors.extend(list(el.embedding) for el in data)
+        last_exc = None
+        for attempt in range(MAX_CALL_RETRIES):
+            try:
+                resp = w.serving_endpoints.query(name=EMBED_ENDPOINT, input=batch)
+                data = getattr(resp, "data", None)
+                if not data:
+                    raise RuntimeError(f"No embedding data returned for batch {i // BATCH}")
+                # elements are returned in input order; extract the .embedding vector from each
+                vectors.extend(list(el.embedding) for el in data)
+                last_exc = None
+                break
+            except Exception as exc:  # noqa: BLE001 - retry transient endpoint slowness/timeouts
+                last_exc = exc
+                wait = 2 ** attempt
+                print(f"    embed batch {i // BATCH} attempt {attempt + 1} failed ({exc!r}); retrying in {wait}s")
+                _time.sleep(wait)
+        if last_exc is not None:
+            raise RuntimeError(f"Embedding batch {i // BATCH} failed after {MAX_CALL_RETRIES} attempts: {last_exc!r}")
     return vectors
 
 
