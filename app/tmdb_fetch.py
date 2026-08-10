@@ -30,20 +30,39 @@ FRESHNESS_HOURS = 24            # re-fetch after this many hours
 
 
 def _get_tmdb_key():
-    """Read the TMDB key from the TMDB_API_KEY env var.
+    """Read the TMDB key from the TMDB_API_KEY env var, falling back to the secret scope.
 
-    In the deployed Databricks App this is mounted from the secret scope via a
-    `{{secrets/movie_night_planner/tmdb_api_key}}` reference in databricks.yml
-    (secrets can't be read via the SDK from a non-notebook app context). For local
-    dev, just export TMDB_API_KEY.
+    The bundle/app.yaml resolve `{{secrets/movie_night_planner/tmdb_api_key}}` into a real
+    value in TMDB_API_KEY, but some deploy paths (the SDK `AppDeployment`, or a bare Apps UI
+    deploy) pass it through as an UNRESOLVED `{{secrets/...}}` literal. Handle all cases:
+    1. env var set with a real key -> use it;
+    2. env var is an unresolved `{{secrets/...}}` literal, or missing -> read the key from the
+       `movie_night_planner` secret scope via the app's service-principal (M2M) auth, which has
+       READ on the scope. For local dev, just export TMDB_API_KEY.
     """
     key = os.environ.get("TMDB_API_KEY")
-    if not key:
-        raise RuntimeError(
-            "TMDB_API_KEY is not set. The app mounts it from the "
-            "'movie_night_planner' secret scope; locally, export TMDB_API_KEY."
+    if key and not key.startswith("{{secrets"):
+        return key
+    try:
+        import base64
+
+        from databricks.sdk import WorkspaceClient
+
+        sv = WorkspaceClient().secrets.get_secret(
+            scope="movie_night_planner", key="tmdb_api_key"
         )
-    return key
+        raw = getattr(sv, "value", None)
+        if raw:
+            return base64.b64decode(raw).decode().strip()
+    except Exception as exc:  # noqa: BLE001 - surface a clear error either way
+        raise RuntimeError(
+            "TMDB_API_KEY is not usable and the secret scope lookup failed "
+            f"(movie_night_planner/tmdb_api_key): {exc!r}"
+        ) from exc
+    raise RuntimeError(
+        "TMDB_API_KEY is not set. Export it locally, or ensure the app SP has READ "
+        "on the 'movie_night_planner' secret scope."
+    )
 
 
 def now_utc():
