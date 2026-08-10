@@ -1,0 +1,55 @@
+resources:
+  jobs:
+    movie_pipeline_job:
+      name: movie_pipeline_job
+      tasks:
+        - task_key: setup
+          notebook_task:
+            notebook_path: ./pipeline/00_setup_tables.py
+        - task_key: ingest
+          notebook_task:
+            notebook_path: ./pipeline/01_ingest_raw.py
+          depends_on:
+            - task_key: setup
+        - task_key: transform
+          notebook_task:
+            notebook_path: ./pipeline/02_transform_silver.py
+          depends_on:
+            - task_key: ingest
+        - task_key: embed
+          notebook_task:
+            notebook_path: ./pipeline/03_embed.py
+          depends_on:
+            - task_key: transform
+        - task_key: index
+          notebook_task:
+            notebook_path: ./pipeline/04_vector_index.py
+          depends_on:
+            - task_key: embed
+      schedule:
+        quartz_cron_expression: "0 7 3 * * ?"
+        timezone_id: UTC
+
+  apps:
+    movie-night-planner:
+      name: movie-night-planner
+      source_code_path: ./app
+      config:
+        command:
+          - streamlit
+          - run
+          - app.py
+        env:
+          - name: CATALOG
+            value: movie_night_planner
+          - name: SCHEMA
+            value: default
+          # Http path of the serverless SQL warehouse the app uses for reads AND agent writes.
+          - name: SQL_WAREHOUSE_PATH
+            value: /sql/1.0/warehouses/eb31d64c1ca0b603
+          - name: EMBED_ENDPOINT
+            value: databricks-bge-large-en
+          - name: CHAT_ENDPOINT
+            value: databricks-meta-llama-3-3-70b-instruct
+          - name: TMDB_API_KEY
+            value: "{{secrets/movie_night_planner/tmdb_api_key}}"

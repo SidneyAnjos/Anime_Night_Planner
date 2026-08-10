@@ -1,0 +1,21 @@
+# Databricks Apps app spec — read by the platform for EVERY deployment, including the
+# Apps UI "Deploy" button and `databricks apps deploy` (which send no command/env).
+# Without this file those bare deployments run `python agent.py` and exit immediately
+# ("app exited unexpectedly"). Deployment-level command/env (deploy_app.py) OVERRIDES this.
+command:
+  - streamlit
+  - run
+  - app.py
+env:
+  - name: CATALOG
+    value: movie_night_planner
+  - name: SCHEMA
+    value: default
+  - name: SQL_WAREHOUSE_PATH
+    value: /sql/1.0/warehouses/eb31d64c1ca0b603
+  - name: EMBED_ENDPOINT
+    value: databricks-bge-large-en
+  - name: CHAT_ENDPOINT
+    value: databricks-meta-llama-3-3-70b-instruct
+  - name: TMDB_API_KEY
+    value: "{{secrets/movie_night_planner/tmdb_api_key}}"
