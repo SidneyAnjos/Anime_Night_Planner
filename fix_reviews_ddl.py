@@ -1,6 +1,6 @@
-import os, json, base64, time
+import time
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout, Disposition, Format, StatementState
+from databricks.sdk.service.sql import Disposition, Format, StatementState
 
 w = WorkspaceClient(profile="SidneyAnjos")
 wid = "/sql/1.0/warehouses/eb31d64c1ca0b603".split("/")[-1]
@@ -14,8 +14,8 @@ sql = """CREATE TABLE IF NOT EXISTS `movie_night_planner`.`default`.`raw_reviews
     payload STRING
 ) USING DELTA"""
 resp = w.statement_execution.execute_statement(
-    warehouse_id=wid, statement=sql, disposition=Disposition.INLINE, format=Format.JSON_ARRAY,
-    wait_timeout=ExecuteStatementRequestOnWaitTimeout.SECONDS_30
+    warehouse_id=wid, statement=sql, disposition=Disposition.INLINE,
+    format=Format.JSON_ARRAY, wait_timeout="30s",
 )
 while resp.status and resp.status.state in (StatementState.PENDING, StatementState.RUNNING):
     time.sleep(1); resp = w.statement_execution.get_statement(resp.statement_id)
