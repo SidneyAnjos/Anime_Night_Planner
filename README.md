@@ -91,8 +91,12 @@ databricks bundle deploy
 # 3. Run the pipeline to populate tables + the vector index
 databricks jobs run-now --job-id <job_id>
 
-# 4. Deploy the app
-databricks apps deploy movie-night-planner
+# 4. Deploy the app — DO NOT use `databricks apps deploy <name>` (or the Apps UI
+#    "Deploy" button): they create a deployment with NO command and NO env vars, so
+#    the app runs `python agent.py`, exits, and reports "app exited unexpectedly".
+#    Use the script instead (syncs app/ to the bundle path + deploys with command
+#    and env vars, resolving TMDB_API_KEY from the secret scope):
+.venv/Scripts/python.exe deploy_app.py
 
 # 5. Grant the app's service principal access (see notes in code / docs)
 ```
