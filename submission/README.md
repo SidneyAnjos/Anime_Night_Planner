@@ -110,7 +110,11 @@ Then open the app URL from the Databricks Apps UI and ask the agent to plan a mo
 ## Notes
 
 - The app makes **no live API calls** at serving time — everything comes from Unity Catalog, so the
-  agent is fully reproducible offline and unaffected by TMDB rate limits. Live TMDB access happens only
-  in step 01 of the scheduled pipeline.
+  agent is fully reproducible offline and unaffected by TMDB rate limits.
+- **TMDB ingestion runs in the app, not the job**: this workspace's serverless job compute has **no
+  outbound internet egress**, so the pipeline's `01_ingest_raw` task cannot reach `api.themoviedb.org`.
+  The Databricks App's Admin page fetches TMDB on app compute (which does have egress) and writes the
+  bronze `raw_*` tables; the pipeline then runs `transform → embed → index` over that bronze to rebuild
+  silver + embeddings + the vector index.
 - The query-side embedder (app `vectorstore.py`) and the index-time embedder (step 03) both call
   `serving_endpoints.invoke("databricks-bge-large-en", …)`, so index and query vectors share one space.
