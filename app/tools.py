@@ -46,6 +46,27 @@ def backfill_bronze_from_tmdb():
             "popular": meta.get("popular", 0), "enriched": meta.get("enriched", 0)}
 
 
+def _native_list(v):
+    """Normalize a value to a JSON-native form for feeding back to the model.
+
+    The databricks-sql-connector returns ARRAY<...> columns as `numpy.ndarray` and typed
+    numerics as numpy scalars. An ndarray breaks `json.dumps` AND truth-tests on it raise
+    "The truth value of an array with more than one element is ambiguous" — which made the
+    genre filter in search_movies_semantic crash. Convert to plain lists/scalars here once.
+    """
+    if isinstance(v, (list, tuple)):
+        return [_native_list(x) for x in v]
+    try:
+        import numpy as np
+        if isinstance(v, np.ndarray):
+            return [_native_list(x) for x in v.tolist()]
+        if isinstance(v, np.generic):
+            return v.item()
+    except ImportError:  # numpy is a transitive dep of databricks-sql-connector; be safe
+        pass
+    return v
+
+
 def _movies_by_ids(ids, extra_where=(), extra_params=()):
     """Fetch movie rows by id, preserving an external ordering via a CASE expression."""
     if not ids:
@@ -63,6 +84,10 @@ def _movies_by_ids(ids, extra_where=(), extra_params=()):
         """,
         list(ids) + list(extra_params),  # IN (...) placeholders precede the extra WHERE params
     )
+    # Normalize numpy ARRAY/scalar values (see _native_list) so genre filtering, truthiness
+    # checks and json.dumps all behave as with plain Python types.
+    for r in rows:
+        r["genres"] = _native_list(r.get("genres"))
     rank = {i: idx for idx, i in enumerate(ids)}
     rows.sort(key=lambda r: rank.get(r["movie_id"], len(ids)))
     return rows

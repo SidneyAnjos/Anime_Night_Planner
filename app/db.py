@@ -44,6 +44,28 @@ def _credentials_provider():
     return {}  # let the connector fall back to its default auth chain
 
 
+def _native(v):
+    """Coerce a databricks-sql-connector value to a JSON/Python-native form.
+
+    The connector returns ARRAY<...> columns as `numpy.ndarray` and typed numerics as numpy
+    scalars. ndarrays break `json.dumps` without a default= AND raise "The truth value of an
+    array with more than one element is ambiguous" on truthiness checks (which crashed the
+    genre filter in tools.search_movies_semantic). Normalizing here means every tool and the
+    app's Browse page receive plain lists / ints / floats — the same shape as any other DB.
+    """
+    if isinstance(v, (list, tuple)):
+        return [_native(x) for x in v]
+    try:
+        import numpy as np
+        if isinstance(v, np.ndarray):
+            return [_native(x) for x in v.tolist()]
+        if isinstance(v, np.generic):
+            return v.item()
+    except ImportError:  # numpy is a transitive dep of databricks-sql-connector; stay safe
+        pass
+    return v
+
+
 class Database:
     def __init__(self, host=None, http_path=None, token=None, catalog=None, schema=None):
         self.host = (host or _env("DATABRICKS_HOST", "")).replace("https://", "").rstrip("/")
@@ -69,12 +91,16 @@ class Database:
         return dsql.connect(**connect_kwargs)
 
     def query(self, sql, params=None):
-        """Run a SELECT and return a list of dicts (lowercased column names)."""
+        """Run a SELECT and return a list of dicts (lowercased column names).
+
+        Every value is passed through `_native` so numpy arrays (ARRAY columns) and numpy
+        scalars become plain lists / ints / floats — see `_native` for why that matters.
+        """
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, params or [])
                 cols = [d[0].lower() for d in cur.description] if cur.description else []
-                return [dict(zip(cols, row)) for row in cur.fetchall()]
+                return [dict(zip(cols, [_native(v) for v in row])) for row in cur.fetchall()]
 
     def execute(self, sql, params=None):
         """Run a DML statement (INSERT / UPDATE / MERGE)."""
