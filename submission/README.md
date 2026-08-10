@@ -2,9 +2,11 @@
 
 Capstone for the **"Rise of the AI Data Engineer"** boot camp. A group movie-recommendation agent built on
 Databricks: it ingests movie data from the **TMDB API** (The Movie Database), embeds unstructured text
-(plot + tagline + keywords + cast + reviews) into a **Vector Search** index, and lets a **LangChain agent** —
-served from a **Databricks App** — semantically search that library, pull up trending titles, compare films,
-and **write back** to Lakebase (watchlist + ratings + recommendations).
+(plot + tagline + keywords + cast + reviews) into a **Vector Search** index, and lets a **native
+function-calling agent** — served from a **Databricks App** — semantically search that library, pull up
+trending titles, compare films, and **write back** to Lakebase (watchlist + ratings + recommendations). The
+agent drives the Foundation Model's structured tool-calling API, so the writes it reports are real rows in
+the warehouse — never a claimed-but-not-performed action.
 
 Data provided by TMDB — free for non-commercial educational use with attribution.
 
