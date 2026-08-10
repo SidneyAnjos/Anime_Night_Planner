@@ -27,14 +27,18 @@ def backfill_bronze_from_tmdb():
     """Fetch TMDB bronze data from app compute (has internet) and load it into the 6 bronze tables.
 
     Runs server-side in the Databricks App to work around the serverless job's lack of outbound
-    internet. Idempotent: only fetches movies not already present in the freshness window.
-    Returns a summary dict for display. NOT an @tool — this is an admin action, not an LLM call.
+    internet. **Replaces** the bronze tables on each run (DELETE then INSERT) so a re-run never
+    leaves stale payloads of a different shape (e.g. the old `/discover/movie` list payloads that
+    lack runtime/genres) mixed with fresh `/movie/{id}` detail payloads. Returns a summary dict
+    for display. NOT an @tool — this is an admin action, not an LLM call.
     """
     from tmdb_fetch import fetch_bronze
     data = fetch_bronze()
     meta = data.pop("_meta", {})
     written = {}
     for table, (rows, columns) in data.items():
+        # Replace stale rows first so the fresh payloads are the ONLY rows for each movie.
+        _db.execute(f"DELETE FROM {_db.table(table)}")
         # Bronze rows are dicts; convert to tuples in column order.
         tuple_rows = [tuple(r.get(c) for c in columns) for r in rows]
         written[table] = _db.bulk_insert(table, columns, tuple_rows)
